@@ -1,4 +1,4 @@
-import { customLlmSecret, deepgramKey, jevKey, vapiKey } from "@/lib/env";
+import { deepgramKey, jevKey, vapiKey } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
@@ -7,6 +7,5 @@ export function GET() {
     jev: Boolean(jevKey()),
     deepgram: Boolean(deepgramKey()),
     vapi: Boolean(vapiKey()),
-    customLlmSecret: Boolean(customLlmSecret()),
   });
 }

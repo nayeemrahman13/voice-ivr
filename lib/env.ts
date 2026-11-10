@@ -9,7 +9,3 @@ export function deepgramKey(): string {
 export function vapiKey(): string {
   return process.env.VAPI_API_KEY || "";
 }
-
-export function customLlmSecret(): string {
-  return process.env.CUSTOM_LLM_SECRET || "";
-}
