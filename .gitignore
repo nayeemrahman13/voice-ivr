@@ -8,3 +8,10 @@ out
 .env.*.local
 next-env.d.ts
 .vercel
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+packages/pipecat-jev/dist/
+packages/pipecat-jev/*.egg-info/

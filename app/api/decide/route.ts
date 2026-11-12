@@ -1,8 +1,8 @@
-import { answerTurn } from "@/lib/answer";
-import { transcribeAudio } from "@/lib/deepgram";
+import { decideFast } from "@/lib/decide";
 import { deepgramKey, jevKey } from "@/lib/env";
 import { errorMessage, errorStatus, HttpError } from "@/lib/errors";
-import { followPlace, parseMenu, systemMessage } from "@/lib/menu";
+import { type Turn } from "@/lib/jev";
+import { parseMenuGraph, validateMenuGraph } from "@/lib/menu";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,35 +11,60 @@ export const maxDuration = 60;
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const menu = parseMenu(body.menu);
+    const graph = parseMenuGraph(body.menu);
     const typed = typeof body.text === "string" ? body.text.trim() : "";
     const audio = decodeAudio(body.audioBase64);
-    let text = typed;
-    let path: "text" | "audio" = "text";
 
-    if (!text) {
-      if (!audio) throw new HttpError("Type a reply or record one.", 400);
-      text = await transcribeAudio({
-        apiKey: deepgramKey(),
-        audio,
-        mimeType: typeof body.mimeType === "string" ? body.mimeType : "audio/webm",
-      });
-      path = "audio";
+    if (!typed && !audio) {
+      throw new HttpError("Type a reply or record one.", 400);
     }
 
-    const opening = followPlace(menu, []).menu.script;
-    const spoken = await answerTurn({
-      body: {
-        messages: [
-          { role: "system", content: systemMessage(menu) },
-          { role: "assistant", content: opening },
-          { role: "user", content: text },
-        ],
-      },
+    const nodeId = typeof body.nodeId === "string" && body.nodeId.trim() ? body.nodeId.trim() : graph.entry;
+    const stack = Array.isArray(body.stack)
+      ? body.stack.filter((s: unknown): s is string => typeof s === "string")
+      : nodeId === graph.entry
+        ? graph.initialStack ?? []
+        : [];
+    const unclearStreak = typeof body.unclearStreak === "number" && body.unclearStreak >= 0 ? body.unclearStreak : 0;
+    const extracted =
+      body.extracted && typeof body.extracted === "object" && !Array.isArray(body.extracted)
+        ? (body.extracted as Record<string, boolean | string>)
+        : {};
+    const history: Turn[] = Array.isArray(body.history)
+      ? body.history
+          .filter(
+            (item: unknown): item is Turn =>
+              Boolean(
+                item &&
+                  typeof item === "object" &&
+                  ((item as Turn).role === "user" || (item as Turn).role === "assistant") &&
+                  typeof (item as Turn).text === "string",
+              ),
+          )
+          .map((item: Turn) => ({ role: item.role, text: item.text }))
+      : [];
+
+    // Note: Outbound webhooks and telephony transfers are NEVER executed in Studio preview (zero SSRF).
+    const decision = await decideFast({
+      graph,
+      nodeId,
+      stack,
+      unclearStreak,
+      extracted,
+      history,
+      text: typed,
+      audio: audio ?? undefined,
+      mimeType: typeof body.mimeType === "string" ? body.mimeType : "audio/webm",
       jevKey: jevKey(),
+      deepgramKey: deepgramKey(),
     });
 
-    return Response.json({ ...spoken, path, transcript: text });
+    const validation = validateMenuGraph(graph);
+
+    return Response.json({
+      ...decision,
+      validation,
+    });
   } catch (error) {
     return Response.json({ error: errorMessage(error) }, { status: errorStatus(error) });
   }

@@ -1,0 +1,39 @@
+{
+  "name": "Legacy Billing",
+  "script": "Welcome.",
+  "start": [
+    "billing"
+  ],
+  "options": [
+    {
+      "id": "billing",
+      "title": "Billing",
+      "hints": "billing",
+      "reply": "",
+      "menu": {
+        "name": "Billing",
+        "script": "Billing menu.",
+        "options": [
+          {
+            "id": "global_back",
+            "title": "Payment",
+            "hints": "pay",
+            "reply": "Paid."
+          },
+          {
+            "id": "payment",
+            "title": "Payment duplicate",
+            "hints": "pay",
+            "reply": "Okay."
+          }
+        ]
+      }
+    },
+    {
+      "id": "unclear",
+      "title": "Billing duplicate",
+      "hints": "billing",
+      "reply": "Again."
+    }
+  ]
+}

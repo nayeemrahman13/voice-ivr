@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Phone menu",
-  description: "Build a Vapi menu that listens with Deepgram Flux, lets Jev pick the stored line, and speaks it with Deepgram.",
+  title: "Jev IVR Studio — Deterministic Pipecat Phone Menus",
+  description:
+    "Design deterministic v2 menu.json voice graphs, test Jev probabilities live, and run in Pipecat.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

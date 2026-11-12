@@ -1,0 +1,21 @@
+{
+  "name": "jev-ivr-skills",
+  "owner": {
+    "name": "TypeSafe Jev IVR"
+  },
+  "metadata": {
+    "description": "Closed-loop deterministic IVR design and verification skills for Pipecat and TypeSafe Jev",
+    "version": "0.2.0"
+  },
+  "plugins": [
+    {
+      "name": "jev-ivr",
+      "description": "Design, validate, self-tune, and wire deterministic v2 IVR graphs into Pipecat pipelines",
+      "version": "0.2.0",
+      "source": "./",
+      "skills": [
+        "./skills/design-ivr"
+      ]
+    }
+  ]
+}

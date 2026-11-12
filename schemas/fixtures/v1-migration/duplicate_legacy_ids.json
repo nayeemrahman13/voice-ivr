@@ -1,0 +1,17 @@
+{
+  "name": "Single legacy",
+  "options": [
+    {
+      "id": "x",
+      "title": "X",
+      "hints": "",
+      "reply": "x"
+    },
+    {
+      "id": "x",
+      "title": "X two",
+      "hints": "",
+      "reply": "x2"
+    }
+  ]
+}
