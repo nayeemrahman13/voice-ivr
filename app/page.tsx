@@ -15,9 +15,29 @@ import {
   type MenuGraph,
 } from "@/lib/menu";
 import {
+  buildPipecatBundle,
+  buildPipecatInitCommand,
+  createZipArchive,
+  defaultExportConfig,
+  graphUsesHandoffLlm,
+  LLM_SERVICES,
+  PIPECAT_PLATFORMS,
+  preferredTransferModeForPlatforms,
+  STT_SERVICES,
+  TTS_SERVICES,
+  validatePipecatExport,
+  type DailyPstnMode,
+  type PipecatBundleFile,
+  type PipecatExportConfig,
+  type PipecatLlmId,
+  type PipecatPlatformId,
+  type PipecatSttId,
+  type PipecatTtsId,
+} from "@/lib/pipecat-export";
+import {
   addNodeOption,
   addSubmenuNode,
-  buildPipecatSnippet,
+  alignGraphTransferModes,
   createStarterGraph,
   exportMenuJson,
   importMenuJson,
@@ -30,6 +50,8 @@ import { useEffect, useRef, useState } from "react";
 type Status = { jev: boolean; deepgram: boolean };
 
 const DTMF_CHOICES = ["", ...Array.from(VALID_DTMF)];
+const TELEPHONY_PLATFORMS = PIPECAT_PLATFORMS.filter((p) => p.category === "telephony");
+const WEB_PLATFORMS = PIPECAT_PLATFORMS.filter((p) => p.category === "web");
 
 export default function Page() {
   const [graph, setGraph] = useState<MenuGraph>(() => createStarterGraph());
@@ -43,6 +65,14 @@ export default function Page() {
   const [simExtracted, setSimExtracted] = useState<Record<string, boolean | string>>({});
   const [simHistory, setSimHistory] = useState<Turn[]>([]);
 
+  // Pipecat Multi-Platform Export state
+  const [exportConfig, setExportConfig] = useState<PipecatExportConfig>(() =>
+    defaultExportConfig(createStarterGraph()),
+  );
+  const [activeFileTab, setActiveFileTab] = useState<string>("bot.py");
+  const [copiedFile, setCopiedFile] = useState<string | null>(null);
+  const [copiedCli, setCopiedCli] = useState(false);
+
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
   const [audio, setAudio] = useState<{ blob: Blob; url: string } | null>(null);
@@ -50,7 +80,6 @@ export default function Page() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<Decision | null>(null);
-  const [copied, setCopied] = useState(false);
 
   const recorder = useRef<MediaRecorder | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -66,6 +95,21 @@ export default function Page() {
   const activeEditId = hasOwn(graph.nodes, selectedNodeId) ? selectedNodeId : graph.entry;
   const activeNode = graph.nodes[activeEditId];
   const validation = validateMenuGraph(graph);
+  const hybrid = graphUsesHandoffLlm(graph);
+  const exportDiagnostics = validatePipecatExport(graph, exportConfig);
+  const pipecatInitCmd = buildPipecatInitCommand(graph, exportConfig);
+
+  let bundleFiles: PipecatBundleFile[] = [];
+  let bundleBuildError = "";
+  try {
+    bundleFiles = buildPipecatBundle(graph, exportConfig);
+  } catch (caught) {
+    bundleBuildError =
+      caught instanceof Error ? caught.message : "Finish incomplete graph fields to preview export bundle.";
+  }
+
+  const currentFile =
+    bundleFiles.find((file) => file.path === activeFileTab) ?? bundleFiles[0] ?? null;
 
   function resetSimSession(targetNode = graph.entry, nextGraph = graph) {
     const startStack = targetNode === nextGraph.entry ? nextGraph.initialStack ?? [] : [];
@@ -171,6 +215,23 @@ export default function Page() {
     }
   }
 
+  function handleDownloadBundle() {
+    if (bundleFiles.length === 0 || exportConfig.platforms.length === 0) return;
+    setError("");
+    try {
+      const zipBytes = createZipArchive(bundleFiles);
+      const blob = new Blob([zipBytes], { type: "application/zip" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${exportConfig.agentName || graph.id || "voice-ivr"}-pipecat.zip`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not build .zip bundle.");
+    }
+  }
+
   async function handleImportFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -181,13 +242,39 @@ export default function Page() {
       const imported = importMenuJson(raw);
       const touched: Record<string, boolean> = {};
       for (const id of Object.keys(imported.nodes)) setOwn(touched, id, true);
+      const freshDefaults = defaultExportConfig(imported);
       setGraph(imported);
       setTouchedScripts(touched);
       setSelectedNodeId(imported.entry);
+      setExportConfig((prev) => ({
+        ...prev,
+        platforms: freshDefaults.platforms,
+        agentName: freshDefaults.agentName,
+        secretSet: freshDefaults.secretSet,
+        image: freshDefaults.image,
+      }));
       resetSimSession(imported.entry, imported);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not import menu JSON.");
     }
+  }
+
+  function togglePlatform(platformId: PipecatPlatformId) {
+    setExportConfig((curr) => {
+      const exists = curr.platforms.includes(platformId);
+      const nextPlatforms = exists
+        ? curr.platforms.filter((p) => p !== platformId)
+        : [...curr.platforms, platformId];
+      return { ...curr, platforms: nextPlatforms };
+    });
+  }
+
+  function enablePlatform(platformId: PipecatPlatformId) {
+    setExportConfig((curr) =>
+      curr.platforms.includes(platformId)
+        ? curr
+        : { ...curr, platforms: [...curr.platforms, platformId] },
+    );
   }
 
   function handleActionTypeChange(optionId: string, actionType: MenuAction["type"]) {
@@ -199,7 +286,11 @@ export default function Page() {
         break;
       }
       case "transfer":
-        action = { type: "transfer", target: "+18005550100", mode: "twilio_dial" };
+        action = {
+          type: "transfer",
+          target: "+18005550100",
+          mode: preferredTransferModeForPlatforms(exportConfig.platforms),
+        };
         break;
       case "webhook":
         action = {
@@ -228,15 +319,13 @@ export default function Page() {
     status && !status.deepgram ? "DEEPGRAM_API_KEY" : "",
   ].filter(Boolean);
 
-  const snippet = buildPipecatSnippet(graph);
-
   return (
     <main>
       <header>
         <p className="kicker">Pipecat + TypeSafe Jev</p>
         <h1>Deterministic IVR Studio</h1>
         <p className="lead">
-          Author a canonical v2 <span className="mono">.menu.json</span> graph, inspect Jev choice probabilities across multi-turn paths, and drop the file straight into <span className="mono">JevMenuProcessor</span> in any Pipecat pipeline.
+          Author a canonical v2 <span className="mono">.menu.json</span> graph, inspect Jev choice probabilities across multi-turn paths, and export a ready-to-run Pipecat 1.16 bundle for any telephony or WebRTC platform.
         </p>
         <ol className="pipeline">
           <li>Deepgram STT / DTMF</li>
@@ -310,9 +399,8 @@ export default function Page() {
                     <span className="mono">id: {option.id}</span>
                     {activeNode.options.length > 1 && (
                       <button
-                        className="secondary"
+                        className="secondary compact"
                         type="button"
-                        style={{ padding: "4px 10px", fontSize: 12 }}
                         onClick={() => setGraph((curr) => removeNodeOption(curr, activeEditId, option.id))}
                       >
                         Remove
@@ -484,9 +572,8 @@ export default function Page() {
 
                   <div className="row">
                     <button
-                      className="secondary"
+                      className="secondary compact"
                       type="button"
-                      style={{ padding: "5px 11px", fontSize: 12 }}
                       onClick={() => {
                         const { graph: next, createdNodeId } = addSubmenuNode(graph, activeEditId, option.id);
                         setGraph(next);
@@ -653,27 +740,315 @@ export default function Page() {
               </div>
             </div>
           )}
+        </section>
+      </div>
 
-          <div className="row" style={{ justifyContent: "space-between", marginTop: 8 }}>
-            <h2>Pipecat 1.16 Pipeline</h2>
+      <section className="export-panel">
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <div className="row">
+            <h2>Pipecat 1.16 Multi-Platform Export</h2>
+            <span className="pill">
+              {hybrid ? "Hybrid IVR (LLM Handoff)" : "Pure IVR (No LLM)"}
+            </span>
+            <span className="hint mono">
+              {exportConfig.platforms.length} platform{exportConfig.platforms.length === 1 ? "" : "s"} selected
+            </span>
+          </div>
+          <div className="row">
+            {currentFile && (
+              <button
+                className="secondary"
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard.writeText(currentFile.content).then(() => {
+                    setCopiedFile(currentFile.path);
+                    setTimeout(() => setCopiedFile(null), 1500);
+                  });
+                }}
+              >
+                {copiedFile === currentFile.path ? `Copied ${currentFile.path}` : `Copy ${currentFile.path}`}
+              </button>
+            )}
             <button
-              className="secondary"
+              type="button"
+              disabled={bundleFiles.length === 0 || exportConfig.platforms.length === 0}
+              onClick={handleDownloadBundle}
+            >
+              Download .zip bundle
+            </button>
+          </div>
+        </div>
+
+        <div className="platform-groups">
+          <div className="platform-group">
+            <h3>Telephony &amp; PSTN Transports</h3>
+            <div className="platform-pills">
+              {TELEPHONY_PLATFORMS.map((platform) => {
+                const selected = exportConfig.platforms.includes(platform.id);
+                return (
+                  <button
+                    key={platform.id}
+                    type="button"
+                    title={platform.notes}
+                    className={`platform-pill ${selected ? "selected" : ""}`}
+                    onClick={() => togglePlatform(platform.id)}
+                  >
+                    <span>{platform.label}</span>
+                    {platform.requiresTransferHook && <span className="badge-tag">hook</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="platform-group">
+            <h3>Web &amp; Real-Time Transports</h3>
+            <div className="platform-pills">
+              {WEB_PLATFORMS.map((platform) => {
+                const selected = exportConfig.platforms.includes(platform.id);
+                return (
+                  <button
+                    key={platform.id}
+                    type="button"
+                    title={platform.notes}
+                    className={`platform-pill ${selected ? "selected" : ""}`}
+                    onClick={() => togglePlatform(platform.id)}
+                  >
+                    <span>{platform.label}</span>
+                    {platform.supportsDtmf && <span className="badge-tag">dtmf</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="export-controls">
+          <label>
+            Speech-to-Text (STT)
+            <select
+              value={exportConfig.stt}
+              onChange={(e) => setExportConfig((c) => ({ ...c, stt: e.target.value as PipecatSttId }))}
+            >
+              {STT_SERVICES.map((svc) => (
+                <option key={svc.id} value={svc.id}>
+                  {svc.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            Text-to-Speech (TTS)
+            <select
+              value={exportConfig.tts}
+              onChange={(e) => setExportConfig((c) => ({ ...c, tts: e.target.value as PipecatTtsId }))}
+            >
+              {TTS_SERVICES.map((svc) => (
+                <option key={svc.id} value={svc.id}>
+                  {svc.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            Specialist LLM ({hybrid ? "active for handoff_llm" : "unused in Pure IVR"})
+            <select
+              value={exportConfig.llm}
+              onChange={(e) => setExportConfig((c) => ({ ...c, llm: e.target.value as PipecatLlmId }))}
+            >
+              {LLM_SERVICES.map((svc) => (
+                <option key={svc.id} value={svc.id}>
+                  {svc.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div>
+            <span className="hint" style={{ display: "block", marginBottom: 4 }}>
+              Deployment Target
+            </span>
+            <div className="row">
+              <button
+                type="button"
+                className={exportConfig.deployTarget === "local" ? "active-node compact" : "secondary compact"}
+                onClick={() => setExportConfig((c) => ({ ...c, deployTarget: "local" }))}
+              >
+                Local Runner
+              </button>
+              <button
+                type="button"
+                className={exportConfig.deployTarget === "pipecat_cloud" ? "active-node compact" : "secondary compact"}
+                onClick={() => setExportConfig((c) => ({ ...c, deployTarget: "pipecat_cloud" }))}
+              >
+                Pipecat Cloud
+              </button>
+            </div>
+          </div>
+
+          {exportConfig.platforms.includes("daily_pstn") && (
+            <label>
+              Daily PSTN Mode
+              <select
+                value={exportConfig.dailyPstnMode}
+                onChange={(e) =>
+                  setExportConfig((c) => ({ ...c, dailyPstnMode: e.target.value as DailyPstnMode }))
+                }
+              >
+                <option value="dial-in">dial-in</option>
+                <option value="dial-out">dial-out</option>
+              </select>
+            </label>
+          )}
+
+          <div className="row" style={{ gap: 16 }}>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={exportConfig.enableKrisp}
+                onChange={(e) => setExportConfig((c) => ({ ...c, enableKrisp: e.target.checked }))}
+              />
+              Krisp VIVA filter
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={exportConfig.enableMetrics}
+                onChange={(e) => setExportConfig((c) => ({ ...c, enableMetrics: e.target.checked }))}
+              />
+              Pipeline metrics
+            </label>
+          </div>
+        </div>
+
+        {exportConfig.deployTarget === "pipecat_cloud" && (
+          <div className="export-controls">
+            <label>
+              Cloud Agent Name
+              <input
+                className="mono"
+                value={exportConfig.agentName}
+                onChange={(e) => setExportConfig((c) => ({ ...c, agentName: e.target.value }))}
+              />
+            </label>
+            <label>
+              Secret Set
+              <input
+                className="mono"
+                value={exportConfig.secretSet}
+                onChange={(e) => setExportConfig((c) => ({ ...c, secretSet: e.target.value }))}
+              />
+            </label>
+            <label>
+              Container Image
+              <input
+                className="mono"
+                value={exportConfig.image}
+                onChange={(e) => setExportConfig((c) => ({ ...c, image: e.target.value }))}
+              />
+            </label>
+          </div>
+        )}
+
+        {exportDiagnostics.length > 0 && (
+          <div className="diag-list">
+            {exportDiagnostics.map((diag, idx) => (
+              <div
+                key={`${diag.code}-${idx}`}
+                className={diag.severity === "warning" ? "banner diag-item" : "info-banner diag-item"}
+              >
+                <span>
+                  <strong>{diag.severity === "warning" ? "Platform warning:" : "Note:"}</strong> {diag.message}
+                </span>
+                {(diag.suggestedTransferMode ||
+                  diag.code === "transfer_mode_twilio_missing" ||
+                  diag.code === "transfer_mode_daily_missing") && (
+                  <div className="row">
+                    {diag.code === "transfer_mode_twilio_missing" && (
+                      <button
+                        type="button"
+                        className="secondary compact"
+                        onClick={() => enablePlatform("twilio")}
+                      >
+                        Enable Twilio
+                      </button>
+                    )}
+                    {diag.code === "transfer_mode_daily_missing" && (
+                      <button
+                        type="button"
+                        className="secondary compact"
+                        onClick={() => enablePlatform("daily_pstn")}
+                      >
+                        Enable Daily PSTN
+                      </button>
+                    )}
+                    {diag.suggestedTransferMode && (
+                      <button
+                        type="button"
+                        className="secondary compact"
+                        onClick={() =>
+                          setGraph((curr) => alignGraphTransferModes(curr, diag.suggestedTransferMode!))
+                        }
+                      >
+                        Switch transfers to {diag.suggestedTransferMode}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div>
+          <div className="row" style={{ justifyContent: "space-between", marginBottom: 6 }}>
+            <h3>Equivalent Pipecat CLI Command</h3>
+            <button
+              className="secondary compact"
               type="button"
               onClick={() => {
-                void navigator.clipboard.writeText(snippet).then(() => {
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 1500);
+                void navigator.clipboard.writeText(pipecatInitCmd).then(() => {
+                  setCopiedCli(true);
+                  setTimeout(() => setCopiedCli(false), 1500);
                 });
               }}
             >
-              {copied ? "Copied" : "Copy bot.py"}
+              {copiedCli ? "Copied" : "Copy CLI command"}
             </button>
           </div>
           <pre className="snippet">
-            <code>{snippet}</code>
+            <code>{pipecatInitCmd}</code>
           </pre>
-        </section>
-      </div>
+        </div>
+
+        {bundleBuildError ? (
+          <div className="banner">
+            <strong>Bundle paused:</strong> {bundleBuildError}
+          </div>
+        ) : (
+          <>
+            <div className="tab-strip">
+              {bundleFiles.map((file) => (
+                <button
+                  key={file.path}
+                  type="button"
+                  className={`tab-btn mono ${currentFile?.path === file.path ? "active" : ""}`}
+                  onClick={() => setActiveFileTab(file.path)}
+                >
+                  {file.path}
+                </button>
+              ))}
+            </div>
+            {currentFile && (
+              <pre className="snippet">
+                <code>{currentFile.content}</code>
+              </pre>
+            )}
+          </>
+        )}
+      </section>
     </main>
   );
 }

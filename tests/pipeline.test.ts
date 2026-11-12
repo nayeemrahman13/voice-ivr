@@ -4,7 +4,24 @@ import { join } from "node:path";
 import test from "node:test";
 import { buildJevGraphRequest, parseGraphPayload } from "../lib/jev";
 import { parseMenuGraph, stepMenuTurn, validateMenuGraph, type MenuGraph } from "../lib/menu";
-import { buildPipecatSnippet, exportMenuJson, importMenuJson, removeNodeOption, updateNodeOption } from "../lib/studio";
+import {
+  buildPipecatBundle,
+  buildPipecatInitCommand,
+  createZipArchive,
+  defaultExportConfig,
+  preferredTransferModeForPlatforms,
+  validatePipecatExport,
+  type PipecatPlatformId,
+} from "../lib/pipecat-export";
+import {
+  alignGraphTransferModes,
+  buildPipecatSnippet,
+  createStarterGraph,
+  exportMenuJson,
+  importMenuJson,
+  removeNodeOption,
+  updateNodeOption,
+} from "../lib/studio";
 
 const fixtureRoot = join(process.cwd(), "schemas/fixtures");
 const json = (path: string) => JSON.parse(readFileSync(path, "utf8")) as unknown;
@@ -123,7 +140,6 @@ test("Studio decide preview returns webhook and transfer actions without outboun
   }
 });
 
-
 test("status route reports configured API keys", async () => {
   const { GET } = await import("../app/api/status/route");
   const previousJev = process.env.TYPESAFE_API_KEY;
@@ -211,4 +227,136 @@ test("prototype node keys are treated as graph data, not inherited properties", 
   assert.equal(exported.entry, "__proto__");
   assert.equal(Object.hasOwn(exported.nodes, "__proto__"), true);
   assert.equal(importMenuJson(JSON.stringify(exported)).nodes["__proto__"].id, "__proto__");
+});
+
+test("Pipecat export validation catches platform mismatches and alignGraphTransferModes resolves them", () => {
+  const starter = createStarterGraph();
+  const baseCfg = defaultExportConfig(starter);
+  assert.deepEqual(baseCfg.platforms, ["twilio", "smallwebrtc"]);
+
+  // Empty platform list warns immediately
+  const emptyDiags = validatePipecatExport(starter, { ...baseCfg, platforms: [] });
+  assert.ok(emptyDiags.some((d) => d.code === "no_platforms" && d.severity === "warning"));
+
+  // Selecting Daily PSTN on a twilio_dial starter flags mismatch & suggests daily_sip_refer
+  const dailyMismatch = validatePipecatExport(starter, { ...baseCfg, platforms: ["daily_pstn"] });
+  const twilioMissing = dailyMismatch.find((d) => d.code === "transfer_mode_twilio_missing");
+  assert.ok(twilioMissing);
+  assert.equal(twilioMissing.suggestedTransferMode, "daily_sip_refer");
+
+  // Aligning graph resolves twilio_dial mismatch cleanly
+  const aligned = alignGraphTransferModes(starter, "daily_sip_refer");
+  const afterAlign = validatePipecatExport(aligned, { ...baseCfg, platforms: ["daily_pstn"] });
+  assert.ok(!afterAlign.some((d) => d.code === "transfer_mode_twilio_missing"));
+  assert.ok(afterAlign.some((d) => d.code === "daily_pstn_dialin"));
+
+  // Selecting Telnyx + LiveKit warns about @ivr.on_transfer custom hook
+  const hookDiags = validatePipecatExport(aligned, { ...baseCfg, platforms: ["telnyx", "livekit"] });
+  assert.ok(hookDiags.some((d) => d.code === "transfer_hook_required" && d.severity === "warning"));
+  assert.ok(hookDiags.some((d) => d.code === "transfer_mode_daily_missing"));
+
+  // SmallWebRTC-only warns on Pipecat Cloud and notes simulated transfer + DTMF
+  const cloudWebOnly = validatePipecatExport(starter, {
+    ...baseCfg,
+    platforms: ["smallwebrtc"],
+    deployTarget: "pipecat_cloud",
+  });
+  assert.ok(cloudWebOnly.some((d) => d.code === "cloud_smallwebrtc_only" && d.severity === "warning"));
+  assert.ok(cloudWebOnly.some((d) => d.code === "web_only_simulated_transfer" && d.severity === "info"));
+  assert.ok(cloudWebOnly.some((d) => d.code === "dtmf_needs_telephony" && d.severity === "info"));
+  assert.ok(cloudWebOnly.some((d) => d.code === "cloud_placeholder_image" && d.severity === "info"));
+
+  // Local Krisp notes KRISP_VIVA_FILTER_MODEL_PATH + krisp_audio
+  const krispLocal = validatePipecatExport(base, { ...baseCfg, platforms: ["daily"], enableKrisp: true });
+  assert.ok(krispLocal.some((d) => d.code === "krisp_local_sdk" && d.severity === "info"));
+
+  assert.equal(preferredTransferModeForPlatforms(["twilio", "telnyx"]), "twilio_dial");
+  assert.equal(preferredTransferModeForPlatforms(["daily_pstn"]), "daily_sip_refer");
+  assert.equal(preferredTransferModeForPlatforms(["telnyx", "livekit"]), "custom");
+});
+
+test("Pipecat bundle generator supports all platforms, services, Pure vs Hybrid IVR, Cloud files, and ZIP archives", () => {
+  const starter = createStarterGraph();
+
+  // Pure IVR with ElevenLabs TTS, AssemblyAI STT, Daily PSTN + SmallWebRTC + Pipecat Cloud + Krisp
+  const cloudConfig = {
+    ...defaultExportConfig(starter),
+    platforms: ["daily_pstn", "daily", "smallwebrtc"] as PipecatPlatformId[],
+    stt: "assemblyai" as const,
+    tts: "elevenlabs" as const,
+    llm: "anthropic" as const,
+    deployTarget: "pipecat_cloud" as const,
+    enableKrisp: true,
+    enableMetrics: false,
+  };
+  const pureFiles = buildPipecatBundle(base, cloudConfig);
+  const paths = pureFiles.map((f) => f.path);
+  assert.deepEqual(paths, [
+    "bot.py",
+    "menu.json",
+    "pyproject.toml",
+    ".env.example",
+    "README.md",
+    "pcc-deploy.toml",
+    "Dockerfile",
+  ]);
+
+  const pureBot = pureFiles.find((f) => f.path === "bot.py")!.content;
+  assert.match(pureBot, /AssemblyAISTTService/);
+  assert.match(pureBot, /ElevenLabsTTSService/);
+  assert.doesNotMatch(pureBot, /AnthropicLLMService/);
+  assert.match(pureBot, /KrispVivaFilter\(\)/);
+  assert.match(pureBot, /DailySipTransferAdapter/);
+  assert.match(pureBot, /enable_metrics=False/);
+  // Daily + daily_pstn deduplicate to a single "daily" key in transport_params
+  assert.equal(pureBot.match(/"daily": lambda: DailyParams/g)?.length, 1);
+
+  const purePyproject = pureFiles.find((f) => f.path === "pyproject.toml")!.content;
+  assert.match(purePyproject, /pipecat-ai\[assemblyai,daily,elevenlabs,runner,silero,webrtc\]/);
+  assert.doesNotMatch(purePyproject, /anthropic/);
+
+  const pureEnv = pureFiles.find((f) => f.path === ".env.example")!.content;
+  assert.match(pureEnv, /ASSEMBLYAI_API_KEY=/);
+  assert.match(pureEnv, /ELEVENLABS_API_KEY=/);
+  assert.match(pureEnv, /KRISP_VIVA_API_KEY=/);
+  assert.match(pureEnv, /KRISP_VIVA_FILTER_MODEL_PATH=/);
+  assert.doesNotMatch(pureEnv, /ANTHROPIC_API_KEY=/);
+
+  const pccToml = pureFiles.find((f) => f.path === "pcc-deploy.toml")!.content;
+  assert.match(pccToml, /enable_krisp = true/);
+
+  // Hybrid IVR with custom hook platforms (Telnyx + LiveKit + Vonage + MOQ) emits LLM & @ivr.on_transfer
+  const hybridBundle = buildPipecatBundle(starter, {
+    ...defaultExportConfig(starter),
+    platforms: ["telnyx", "livekit", "vonage", "moq"],
+    stt: "cartesia",
+    tts: "rime",
+    llm: "anthropic",
+    deployTarget: "local",
+  });
+  assert.equal(hybridBundle.some((f) => f.path === "pcc-deploy.toml"), false);
+  const hybridBot = hybridBundle.find((f) => f.path === "bot.py")!.content;
+  assert.match(hybridBot, /AnthropicLLMService/);
+  assert.match(hybridBot, /@ivr\.on_transfer/);
+  assert.match(hybridBot, /LiveKitParams/);
+  assert.match(hybridBot, /MOQParams/);
+  assert.match(hybridBot, /VonageVideoConnectorTransportParams/);
+
+  // CLI command reflection
+  const cli = buildPipecatInitCommand(starter, cloudConfig);
+  assert.match(cli, /--bot-type telephony/);
+  assert.match(cli, /--transport daily_pstn/);
+  assert.match(cli, /--deploy-to-cloud/);
+  assert.match(cli, /--enable-krisp/);
+
+  // ZIP binary structure check (PK\x03\x04 start + PK\x05\x06 EOCD + all filenames)
+  const zipBytes = createZipArchive(pureFiles);
+  assert.equal(zipBytes[0], 0x50);
+  assert.equal(zipBytes[1], 0x4b);
+  assert.equal(zipBytes[2], 0x03);
+  assert.equal(zipBytes[3], 0x04);
+  const zipText = Buffer.from(zipBytes).toString("latin1");
+  for (const f of pureFiles) {
+    assert.ok(zipText.includes(f.path), `missing ${f.path} in ZIP archive`);
+  }
 });

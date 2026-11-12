@@ -8,11 +8,16 @@ import {
   RESERVED_OPTION_IDS,
   setOwn,
   slugify,
+  type FallbackAction,
   type MenuAction,
   type MenuGraph,
   type MenuNode,
   type MenuNodeOption,
+  type TransferMode,
 } from "./menu";
+import { buildBotPy, defaultExportConfig, graphUsesHandoffLlm } from "./pipecat-export";
+
+export { graphUsesHandoffLlm };
 
 export function createStarterGraph(): MenuGraph {
   const options: MenuNodeOption[] = [
@@ -238,55 +243,54 @@ export function addSubmenuNode(
   return { graph: nextGraph, createdNodeId: newNodeId };
 }
 
-export function graphUsesHandoffLlm(graph: MenuGraph): boolean {
-  if (graph.fallbackAction?.type === "handoff_llm") return true;
-  if (
-    graph.globals.operator &&
-    typeof graph.globals.operator === "object" &&
-    graph.globals.operator.action.type === "handoff_llm"
-  ) {
-    return true;
-  }
-  for (const node of Object.values(graph.nodes)) {
-    for (const opt of node.options) {
-      if (opt.action.type === "handoff_llm") return true;
-      if (opt.action.type === "webhook") {
-        if (opt.action.next.type === "handoff_llm" || opt.action.onFailure?.type === "handoff_llm") {
-          return true;
-        }
+function rewriteFallbackTransfer(
+  fallback: FallbackAction | undefined,
+  mode: TransferMode,
+): FallbackAction | undefined {
+  if (!fallback || fallback.type !== "transfer") return fallback;
+  return { ...fallback, mode };
+}
+
+export function alignGraphTransferModes(graph: MenuGraph, mode: TransferMode): MenuGraph {
+  const nextNodes = cloneRecord(graph.nodes);
+  for (const [nodeId, node] of Object.entries(graph.nodes)) {
+    const nextOptions = node.options.map((opt) => {
+      if (opt.action.type === "transfer") {
+        return { ...opt, action: { ...opt.action, mode } };
       }
-    }
+      if (opt.action.type === "webhook" && opt.action.onFailure?.type === "transfer") {
+        return {
+          ...opt,
+          action: {
+            ...opt.action,
+            onFailure: rewriteFallbackTransfer(opt.action.onFailure, mode),
+          },
+        };
+      }
+      return opt;
+    });
+    setOwn(nextNodes, nodeId, { ...node, options: nextOptions });
   }
-  return false;
+
+  const nextOperator =
+    graph.globals.operator && typeof graph.globals.operator === "object"
+      ? {
+          ...graph.globals.operator,
+          action: rewriteFallbackTransfer(graph.globals.operator.action, mode)!,
+        }
+      : graph.globals.operator;
+
+  return {
+    ...graph,
+    ...(graph.fallbackAction ? { fallbackAction: rewriteFallbackTransfer(graph.fallbackAction, mode) } : {}),
+    globals: {
+      ...graph.globals,
+      ...(nextOperator !== undefined ? { operator: nextOperator } : {}),
+    },
+    nodes: nextNodes,
+  };
 }
 
 export function buildPipecatSnippet(graph: MenuGraph, filename = `${graph.id || "ivr"}.menu.json`): string {
-  const hybrid = graphUsesHandoffLlm(graph);
-  const lines = [
-    "import os",
-    "from pipecat.pipeline.pipeline import Pipeline",
-    "from pipecat.processors.aggregators.llm_context import LLMContext",
-    "from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair",
-    "from pipecat.services.deepgram.stt import DeepgramSTTService",
-    "from pipecat.services.deepgram.tts import DeepgramTTSService",
-    ...(hybrid ? ["from pipecat.services.openai.llm import OpenAILLMService"] : []),
-    "from pipecat_jev import JevMenuProcessor",
-    "",
-    "context = LLMContext()",
-    "user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)",
-    "",
-    `ivr = JevMenuProcessor.from_file("${filename}", api_key=os.environ["TYPESAFE_API_KEY"])`,
-    "",
-    "pipeline = Pipeline([",
-    "    transport.input(),",
-    '    DeepgramSTTService(api_key=os.environ["DEEPGRAM_API_KEY"]),',
-    "    user_aggregator,",
-    "    ivr,",
-    ...(hybrid ? ['    OpenAILLMService(api_key=os.environ["OPENAI_API_KEY"]),'] : []),
-    '    DeepgramTTSService(api_key=os.environ["DEEPGRAM_API_KEY"], voice="aura-2-asteria-en"),',
-    "    transport.output(),",
-    "    assistant_aggregator,",
-    "])",
-  ];
-  return lines.join("\n");
+  return buildBotPy(graph, defaultExportConfig(graph), filename);
 }
