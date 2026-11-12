@@ -1,10 +1,76 @@
-# Phone menu
+# Deterministic Voice IVR (`pipecat-jev` + Studio + Agent Skill)
 
-Build a phone menu and run it as a [Vapi](https://vapi.ai) assistant. You list the options and write the line the agent says for each one. An option can open a nested menu.
+Build zero-hallucination voice phone menus powered by [TypeSafe Jev](https://docs.typesafe.ai/api/system-one) and run them in any [Pipecat](https://www.pipecat.ai/) `>=1.16` pipeline.
 
-On a call, Deepgram Flux listens, [Jev](https://docs.typesafe.ai) picks the stored line for the current menu, and Deepgram speaks that line. The agent does not invent a reply.
+Callers speak naturally (or press keypad digits); Jev classifies intent with calibrated probabilities and optional `noul`/`choice` extraction; TTS speaks only approved verbatim scripts—or hands off open-ended branches (`handoff_llm`) to a downstream specialist LLM.
 
-## Setup
+## What's Inside
+
+| Path | Purpose |
+| --- | --- |
+| `packages/pipecat-jev/` | Publishable Python package providing `JevMenuProcessor` (`FrameProcessor`), Twilio/Daily SIP transfer adapters, and the non-interactive `jev-ivr` CLI (`schema`, `validate`, `eval`). |
+| `skills/design-ivr/` & `.claude-plugin/` | Agent skill (`/jev-ivr:design-ivr`) composed with [`pipecat-ai/skills`](https://github.com/pipecat-ai/skills) (`init`, `deploy`) so AI coding agents can author, self-tune against Jev probabilities, and deploy any IVR. |
+| `app/` & `lib/` | Next.js **Deterministic IVR Studio & Multi-Turn Jev Playground** for editing canonical v2 `.menu.json` graphs, recording mic turns via Deepgram, inspecting probability bars, and exporting Pipecat `bot.py` pipelines. |
+
+## 1. Python Package & `jev-ivr` CLI (`packages/pipecat-jev`)
+
+```bash
+cd packages/pipecat-jev
+uv sync --extra dev
+
+# Print canonical v2 menu.json JSON Schema
+uv run jev-ivr schema
+
+# Lint graph structure, cycle exits, DTMF collisions, and voice UX budgets
+uv run jev-ivr validate path/to/menu.json --json
+
+# Run tune or holdout evals against TypeSafe Jev (/v1/systemone)
+TYPESAFE_API_KEY=... uv run jev-ivr eval path/to/menu.json --split tune --json
+TYPESAFE_API_KEY=... uv run jev-ivr eval path/to/menu.json --split holdout --json
+```
+
+### Drop Into a Pipecat 1.16 Pipeline
+
+```python
+import os
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.deepgram.tts import DeepgramTTSService
+from pipecat_jev import JevMenuProcessor
+
+context = LLMContext()
+user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
+
+ivr = JevMenuProcessor.from_file("menu.json", api_key=os.environ["TYPESAFE_API_KEY"])
+
+pipeline = Pipeline([
+    transport.input(),
+    DeepgramSTTService(api_key=os.environ["DEEPGRAM_API_KEY"]),
+    user_aggregator,
+    ivr,  # Sits in the LLM slot (or immediately ahead of an LLMService for `handoff_llm`)
+    DeepgramTTSService(api_key=os.environ["DEEPGRAM_API_KEY"], voice="aura-2-asteria-en"),
+    transport.output(),
+    assistant_aggregator,
+])
+```
+
+## 2. Agent-Authored IVRs (`pipecat-ai/skills` + `design-ivr`)
+
+Register both plugin marketplaces in Claude Code (or use the skills pre-installed under `.agents/skills/` in OpenCode / Codex / Cursor):
+
+```text
+/plugin marketplace add pipecat-ai/skills
+/plugin install pipecat@pipecat-skills pipecat-cloud@pipecat-skills
+
+/plugin marketplace add <owner>/voice-ivr
+/plugin install jev-ivr@jev-ivr-skills
+```
+
+Then ask your agent to scaffold, design, tune against `jev-ivr eval`, and audition over `smallwebrtc` via `/jev-ivr:design-ivr`.
+
+## 3. Web Studio & Playground
 
 ```bash
 npm install
@@ -12,36 +78,14 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
-
-| Variable | Used for |
-| --- | --- |
-| `TYPESAFE_API_KEY` | Jev classification. `JEV_API_KEY` is also accepted. |
-| `DEEPGRAM_API_KEY` | Transcribing a recording in the on-page test. A live Vapi call uses Vapi's Deepgram transcriber and voice. |
-| `VAPI_API_KEY` | Creating the assistant from this page. |
-
-## Try a menu
-
-Edit the options, the phrases a caller might say, and the line the agent speaks after Jev picks one. Nested menus have their own script and options.
-
-**Run the turn** sends the current menu to Jev. A typed reply is used as-is. A recording is transcribed with Deepgram first. The page shows the stored line Jev chose and which menu the call is now in.
-
-A menu needs at least two options.
-
-## Put it on a call
-
-The page builds a Vapi assistant:
-
-- Transcriber: Deepgram Flux (`flux-general-en`)
-- Model: this app as a custom LLM
-- Voice: Deepgram Aura 2 (`asteria`)
-
-**Download assistant** saves that config as JSON. **Create in Vapi** posts it to Vapi and returns a dashboard link.
-
-Vapi calls `{custom LLM base URL}/chat/completions`. The page fills that URL from the current origin. A local address is enough to try a reply on this page. A live call needs a public URL for this server.
+Open [http://localhost:3000](http://localhost:3000) to edit `.menu.json` v2 graphs, test voice or typed turns with live Jev probability bars, and copy ready-to-run Pipecat `bot.py` snippets.
 
 ## Tests
 
 ```bash
+# TypeScript conformance & Studio tests
 npm test
+
+# Python schema, validator, evaluator & Pipecat 1.16 frame pipeline tests
+cd packages/pipecat-jev && uv run pytest
 ```

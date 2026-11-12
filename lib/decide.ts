@@ -1,17 +1,22 @@
 import { transcribeAudio } from "./deepgram";
 import { HttpError } from "./errors";
-import { classifyTurn, type Choice } from "./jev";
-import { CONFIDENCE, type Menu } from "./menu";
+import { classifyNodeTurn, type NodeClassification, type Turn } from "./jev";
+import { hasOwn, type MenuGraph } from "./menu";
 import { firstConfident } from "./race";
 
-export type Decision = Choice & {
+export type Decision = NodeClassification & {
   path: "text" | "audio";
   ms: number;
-  transcript?: string;
+  transcript: string;
 };
 
 export async function decideFast(args: {
-  menu: Menu;
+  graph: MenuGraph;
+  nodeId?: string;
+  stack?: string[];
+  unclearStreak?: number;
+  extracted?: Record<string, boolean | string>;
+  history?: Turn[];
   text?: string;
   audio?: Uint8Array;
   mimeType?: string;
@@ -21,14 +26,28 @@ export async function decideFast(args: {
 }): Promise<Decision> {
   const tasks: Promise<Decision>[] = [];
   const text = args.text?.trim() ?? "";
+  const nodeId = args.nodeId || args.graph.entry;
+  const threshold =
+    (hasOwn(args.graph.nodes, nodeId) ? args.graph.nodes[nodeId].confidenceThreshold : undefined) ??
+    args.graph.confidenceThreshold;
 
   if (text) {
-    tasks.push(timed("text", () => classifyTurn({
-      apiKey: args.jevKey,
-      menu: args.menu,
-      turn: text,
-      fetchImpl: args.fetchImpl,
-    })));
+    tasks.push(
+      timed("text", async () => {
+        const result = await classifyNodeTurn({
+          apiKey: args.jevKey,
+          graph: args.graph,
+          nodeId,
+          stack: args.stack,
+          unclearStreak: args.unclearStreak,
+          extracted: args.extracted,
+          history: args.history,
+          turn: text,
+          fetchImpl: args.fetchImpl,
+        });
+        return { ...result, transcript: text };
+      }),
+    );
   }
 
   if (args.audio && args.audio.byteLength > 0) {
@@ -40,13 +59,18 @@ export async function decideFast(args: {
           mimeType: args.mimeType || "audio/webm",
           fetchImpl: args.fetchImpl,
         });
-        const choice = await classifyTurn({
+        const result = await classifyNodeTurn({
           apiKey: args.jevKey,
-          menu: args.menu,
+          graph: args.graph,
+          nodeId,
+          stack: args.stack,
+          unclearStreak: args.unclearStreak,
+          extracted: args.extracted,
+          history: args.history,
           turn: transcript,
           fetchImpl: args.fetchImpl,
         });
-        return { ...choice, transcript };
+        return { ...result, transcript };
       }),
     );
   }
@@ -55,12 +79,12 @@ export async function decideFast(args: {
     throw new HttpError("Type a reply or record one.", 400);
   }
 
-  return firstConfident(tasks, CONFIDENCE);
+  return firstConfident(tasks, threshold);
 }
 
 async function timed(
   path: Decision["path"],
-  run: () => Promise<Choice & { transcript?: string }>,
+  run: () => Promise<NodeClassification & { transcript: string }>,
 ): Promise<Decision> {
   const started = Date.now();
   const choice = await run();

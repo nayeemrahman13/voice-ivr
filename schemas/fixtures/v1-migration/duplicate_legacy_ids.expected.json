@@ -1,0 +1,39 @@
+{
+  "version": 2,
+  "id": "single_legacy",
+  "name": "Single legacy",
+  "entry": "main",
+  "confidenceThreshold": 0.55,
+  "maxUnclearTurns": 2,
+  "globals": {
+    "back": true,
+    "repeat": true
+  },
+  "nodes": {
+    "main": {
+      "id": "main",
+      "name": "Single legacy",
+      "script": "Thanks for calling Single legacy. You can say X or X two.",
+      "options": [
+        {
+          "id": "x",
+          "title": "X",
+          "hints": "",
+          "reply": "x",
+          "action": {
+            "type": "reply_only"
+          }
+        },
+        {
+          "id": "x_2",
+          "title": "X two",
+          "hints": "",
+          "reply": "x2",
+          "action": {
+            "type": "reply_only"
+          }
+        }
+      ]
+    }
+  }
+}

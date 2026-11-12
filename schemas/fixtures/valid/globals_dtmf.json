@@ -1,0 +1,51 @@
+{
+  "version": 2,
+  "id": "fixture",
+  "name": "Fixture Co",
+  "entry": "main",
+  "confidenceThreshold": 0.55,
+  "maxUnclearTurns": 2,
+  "globals": {
+    "back": {
+      "dtmf": "0"
+    },
+    "repeat": {
+      "dtmf": "9"
+    },
+    "operator": {
+      "dtmf": "*",
+      "action": {
+        "type": "transfer",
+        "target": "+18005550123",
+        "mode": "twilio_dial"
+      }
+    }
+  },
+  "nodes": {
+    "main": {
+      "id": "main",
+      "name": "Main",
+      "script": "Welcome.",
+      "options": [
+        {
+          "id": "help",
+          "title": "Help",
+          "hints": "help",
+          "reply": "Sure.",
+          "action": {
+            "type": "end_call"
+          }
+        },
+        {
+          "id": "other",
+          "title": "Other",
+          "hints": "other",
+          "reply": "Okay.",
+          "action": {
+            "type": "reply_only"
+          }
+        }
+      ]
+    }
+  }
+}

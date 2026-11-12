@@ -1,0 +1,68 @@
+{
+  "version": 2,
+  "id": "legacy_billing",
+  "name": "Legacy Billing",
+  "entry": "billing",
+  "initialStack": [
+    "main"
+  ],
+  "confidenceThreshold": 0.55,
+  "maxUnclearTurns": 2,
+  "globals": {
+    "back": true,
+    "repeat": true
+  },
+  "nodes": {
+    "billing": {
+      "id": "billing",
+      "name": "Billing",
+      "script": "Billing menu.",
+      "options": [
+        {
+          "id": "global_back_option",
+          "title": "Payment",
+          "hints": "pay",
+          "reply": "Paid.",
+          "action": {
+            "type": "reply_only"
+          }
+        },
+        {
+          "id": "payment",
+          "title": "Payment duplicate",
+          "hints": "pay",
+          "reply": "Okay.",
+          "action": {
+            "type": "reply_only"
+          }
+        }
+      ]
+    },
+    "main": {
+      "id": "main",
+      "name": "Legacy Billing",
+      "script": "Welcome.",
+      "options": [
+        {
+          "id": "billing",
+          "title": "Billing",
+          "hints": "billing",
+          "reply": "",
+          "action": {
+            "type": "goto",
+            "target": "billing"
+          }
+        },
+        {
+          "id": "unclear_option",
+          "title": "Billing duplicate",
+          "hints": "billing",
+          "reply": "Again.",
+          "action": {
+            "type": "reply_only"
+          }
+        }
+      ]
+    }
+  }
+}

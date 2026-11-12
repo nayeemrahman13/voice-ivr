@@ -1,0 +1,55 @@
+{
+  "version": 2,
+  "id": "fixture",
+  "name": "Fixture Co",
+  "entry": "main",
+  "confidenceThreshold": 0.55,
+  "maxUnclearTurns": 2,
+  "globals": {
+    "back": true,
+    "repeat": true
+  },
+  "nodes": {
+    "main": {
+      "id": "main",
+      "name": "Main",
+      "script": "Welcome.",
+      "options": [
+        {
+          "id": "help",
+          "title": "Help",
+          "hints": "help",
+          "reply": "Sure.",
+          "action": {
+            "type": "end_call"
+          }
+        },
+        {
+          "id": "other",
+          "title": "Other",
+          "hints": "other",
+          "reply": "Okay.",
+          "action": {
+            "type": "reply_only"
+          }
+        }
+      ]
+    }
+  },
+  "evals": [
+    {
+      "id": "help-case",
+      "split": "tune",
+      "node": "main",
+      "say": "I need help",
+      "expect": "help"
+    },
+    {
+      "id": "holdout",
+      "split": "holdout",
+      "node": "main",
+      "say": "Something else",
+      "expect": "unclear"
+    }
+  ]
+}

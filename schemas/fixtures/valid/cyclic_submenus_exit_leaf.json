@@ -1,0 +1,66 @@
+{
+  "version": 2,
+  "id": "fixture",
+  "name": "Fixture Co",
+  "entry": "main",
+  "confidenceThreshold": 0.55,
+  "maxUnclearTurns": 2,
+  "globals": {
+    "back": true,
+    "repeat": true
+  },
+  "nodes": {
+    "main": {
+      "id": "main",
+      "name": "Main",
+      "script": "Welcome.",
+      "options": [
+        {
+          "id": "help",
+          "title": "Help",
+          "hints": "help",
+          "reply": "Sure.",
+          "action": {
+            "type": "goto",
+            "target": "billing"
+          }
+        },
+        {
+          "id": "other",
+          "title": "Other",
+          "hints": "other",
+          "reply": "Okay.",
+          "action": {
+            "type": "reply_only"
+          }
+        }
+      ]
+    },
+    "billing": {
+      "id": "billing",
+      "name": "Billing",
+      "script": "Billing choices.",
+      "options": [
+        {
+          "id": "back",
+          "title": "Back",
+          "hints": "back",
+          "reply": "",
+          "action": {
+            "type": "goto",
+            "target": "main"
+          }
+        },
+        {
+          "id": "done",
+          "title": "Done",
+          "hints": "done",
+          "reply": "Done.",
+          "action": {
+            "type": "end_call"
+          }
+        }
+      ]
+    }
+  }
+}
