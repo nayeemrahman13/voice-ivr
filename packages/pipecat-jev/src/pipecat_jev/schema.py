@@ -22,8 +22,6 @@ GLOBAL_REPEAT = "global_repeat"
 GLOBAL_OPERATOR = "global_operator"
 
 RESERVED_OPTION_IDS = frozenset({UNCLEAR, GLOBAL_BACK, GLOBAL_REPEAT, GLOBAL_OPERATOR})
-VALID_DTMF = frozenset({"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "#"})
-ID_RE = re.compile(r"^[a-z0-9_]+$")
 QUESTION_KEY_RE = re.compile(r"^[a-zA-Z0-9_]+$")
 
 DEFAULT_BACK_HINTS = "Go back, previous menu, return to the previous options"
