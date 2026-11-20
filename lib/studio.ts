@@ -15,9 +15,7 @@ import {
   type MenuNodeOption,
   type TransferMode,
 } from "./menu";
-import { buildBotPy, defaultExportConfig, graphUsesHandoffLlm } from "./pipecat-export";
-
-export { graphUsesHandoffLlm };
+import { buildBotPy, defaultExportConfig } from "./pipecat-export";
 
 export function createStarterGraph(): MenuGraph {
   const options: MenuNodeOption[] = [
