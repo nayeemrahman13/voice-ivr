@@ -30,8 +30,7 @@ export function firstConfident<T extends Ranked>(tasks: Promise<T>[], threshold:
           if (!best || prefer(value, best)) best = value;
           open -= 1;
           if (open === 0) {
-            if (best) finish(best);
-            else reject(new Error("Classification failed."));
+            finish(best!);
           }
         },
         () => {
