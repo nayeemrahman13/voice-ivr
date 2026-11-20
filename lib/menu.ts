@@ -133,22 +133,6 @@ export type MenuGraph = {
   evals?: MenuEvalCase[];
 };
 
-// Legacy v1 nested-tree types retained solely for migration support
-export type MenuOption = {
-  id: string;
-  title: string;
-  hints: string;
-  reply: string;
-  menu?: Menu;
-};
-
-export type Menu = {
-  name: string;
-  script: string;
-  options: MenuOption[];
-  start?: string[];
-};
-
 export type ValidationIssue = {
   code: string;
   path: string;
